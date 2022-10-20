@@ -229,9 +229,9 @@ async def reload(ctx):
 async def delete(ctx, channel_link):
     deleted = db.delete(channel_link)
     if deleted is not None and not deleted.empty:
-        await ctx.send('Delete:', channel_link)
+        await ctx.send('Delete: ' + channel_link)
     else:
-        await ctx.send('Not found:', channel_link)
+        await ctx.send('Not found: '+ channel_link)
 
 
 @bot.command(name='fo', description='follow: channel url, follow_type')
@@ -621,10 +621,13 @@ def extract_msgid(my_msg_hash):
 
 
 def add_reaction_to_rumble(msgs: list, authorization_token):
-    reaction = {'id': '872886436012126279', 'name': 'Swrds'}
+    '''
+    https://discord.com/api/v9/channels/1030801986687344680/messages/1031398521720557578/reactions/Swrds:872886436012126279/@me?location=Message&burst=false
+    '''
+    sword_reaction = r'Swrds:872886436012126279/@me?location=Message&burst=false'
     for msg in msgs:
-        url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}/@me".format( \
-            msg['channel_id'], msg['id'], quote(json.dumps(reaction)))
+        url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}".format( \
+            msg['channel_id'], msg['id'], sword_reaction)
         header = get_header(authorization_token)
         try:
             res = requests.put(url, headers=header)
@@ -666,50 +669,56 @@ def inform_giveaway(msg):
 
     if info['has_mention']:
         return True
-    if info['bot'] == 'Rumble Royale':
+    if re.search('rumble royale|battle royale', info['bot'].lower()):
         if info['type'] == 'start' or info['type'] == 'waiting':
             return True
         else:
             return False
-    else:
+    elif info['bot']:
         if info['type'] == 'giveaway':
             return True
-        elif info['type'] == 'create' or info['type'] == 'result':
+        elif re.search('create|result|remind', info['type']):
             return False
-        elif info['bot']:
+        else:
+            return True
+    else:
+        if msg_has_str(msg, 'http', 'premint', 'superful', 'alphabot','giveaway', '抽獎'):
             return True
         else:
             return False
 
-    # elif:
 
 
 def is_giveaway(msg):
-    ret = dict(bot=False, has_mention=has_mention(msg, my_dc_id), type='')
+    ret = dict(bot='', has_mention=has_mention(msg, my_dc_id), type='')
     with suppress(Exception):
         if not msg['author']['bot']:
             return ret
         else:
             ret['bot'] = msg['author']['username']
 
-        if msg['author']['username'] == 'Rumble Royale':
+        if re.search('rumble royale|battle royale', msg['author']['username'].lower()):
             for embed in msg['embeds']:
                 if 'hosted' in embed['description'].lower() \
                         or '主催者' in embed['description']:
                     ret['type'] = 'start'
                     break
+                elif '🎉' in msg['content']:
+                    ret['type']='done,result'
+                    break
                 elif 'starting in' in embed['description'].lower() \
                         or '開始まで' in embed['description']:
                     ret['type'] = 'waiting'
                     break
-                elif 'winner' in embed['description'].lower():
+                elif 'winner' in embed['title'].lower():
                     ret['type'] = 'done'
                     break
                 elif 'cancelled' in embed['title'].lower():
                     ret['type'] = 'done,cancelled'
                     break
-                elif 'round' in embed['description'].lower() \
-                        or '回戦' in embed['description']:
+                elif 'round' in embed['title'].lower() \
+                        or '回戦' in embed['title'] \
+                        or '復活' in embed['title']:
                     ret['type'] = 'battle'
                     break
                 else:
@@ -718,6 +727,8 @@ def is_giveaway(msg):
         elif msg['author']['username'] == 'Alphabot':
             if msg_has_str(msg, 'winner') or msg_has_str(msg, 'congratu'):
                 ret['type'] = 'result'
+            elif msg_has_str(msg, 'is minting'):
+                ret['type'] = 'remind'
             else:
                 ret['type'] = 'giveaway'
         elif msg['author']['username'] == 'Invite Tracker':
@@ -740,17 +751,19 @@ def is_giveaway(msg):
     return ret
 
 
-def msg_has_str(msg, s):
+def msg_has_str(msg, *args):
     with suppress(Exception):
-        if s in msg['content'].lower():
-            return True
+        for s in args:
+            if s in msg['content'].lower():
+                return True
 
     with suppress(Exception):
         for embed in msg['embeds']:
-            if s in embed['description'].lower():
-                return True
-            if s in embed['title'].lower():
-                return True
+            for s in args:
+                if s in embed['description'].lower():
+                    return True
+                if s in embed['title'].lower():
+                    return True
     return False
 
 
@@ -772,11 +785,13 @@ def has_mention(msg, dcid=my_dc_id):
 if __name__ == '__main__':
     auth = AUTH
     test_channel_url = 'https://discord.com/channels/1025595001549357067/1030801986687344680'
-    test_channel_url = 'https://discord.com/channels/1003596556357861376/1003596560808017942'
+    test_channel_url = 'https://discord.com/channels/1012566778578219040/1019181253263622227'
     # test_channel_url = 'https://discord.com/channels/1010432727939563630/1016704719890165781'
     # test_message_url = 'https://discord.com/channels/1025595001549357067/1030801986687344680/1030806384922611774'
-    # msgs = get_msg(test_channel_url, auth, limit=20)
-    # add_reaction_to_rumble(find_rumble_start_msg(msgs), auth)
+    msgs = get_msg(test_channel_url, auth, limit=30)
+    add_reaction_to_rumble(find_rumble_start_msg(msgs), auth)
+
+
 
     db = discord_server_channel_db()
     hq = http_request_thread()
