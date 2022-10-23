@@ -44,11 +44,11 @@ channel_types = 'announcement,giveaway,game'.split(',')
 # msg_to_be_sent = {c: Queue() for c in channel_types}
 
 lock = Lock()
-
+rumble_msg_joined = set()
 check_freq = dict(  ## seconds
-    announcement=600,
-    giveaway=120,
-    game=60,
+    announcement=611,
+    giveaway=299,
+    game=59,
     self_mention=120
 )
 
@@ -209,12 +209,20 @@ async def auth(ctx, auth):
 @bot.command(name='list-follow', description='list followed servers/channels')
 @commands.has_permissions(administrator=True)
 async def list_following(ctx, type=None):
-    db = discord_server_channel_db()
+    # db = discord_server_channel_db()
     if type is None:
         await ctx.send(db.data.to_markdown(tablefmt='grid'))
     else:
         pass
 
+@bot.command(name='list-follow-project', description='list followed servers/channels')
+# @commands.has_permissions(administrator=True)
+async def list_following_project(ctx, type=None):
+    # db = discord_server_channel_db()
+    if type is None:
+        await ctx.send(db.data['project'].unique().to_markdown(tablefmt='grid'))
+    else:
+        pass
 
 @bot.command(name='reload', description='reload table')
 @commands.has_permissions(administrator=True)
@@ -231,7 +239,7 @@ async def delete(ctx, channel_link):
     if deleted is not None and not deleted.empty:
         await ctx.send('Delete: ' + channel_link)
     else:
-        await ctx.send('Not found: '+ channel_link)
+        await ctx.send('Not found: ' + channel_link)
 
 
 @bot.command(name='fo', description='follow: channel url, follow_type')
@@ -242,7 +250,7 @@ async def follow(ctx,
     channel = get_channel(channel_url, auth)
 
     if not follow_type:
-        if re.search(r'announce|news|通告|公告|アナウン|お知', channel['name'], re.I):
+        if re.search(r'announce|news|通告|公告|アナウン|お知|ticket', channel['name'], re.I): # also track ticket
             follow_type = 'announcement'
         elif re.search(r'giveaway|collab|抽獎', channel['name'], re.I):
             follow_type = 'giveaway'
@@ -307,6 +315,7 @@ def get_api(url, authorization_token):
         res = res.json()
         return res
     except:
+        print(res, "can't convert to json")
         traceback.print_exc()
         # pass
 
@@ -400,18 +409,24 @@ def strip_channel_url(channel_url):
 #         # pass
 
 
-def get_msg(channel_id, authorization_token, after_msg_id=None, limit=100):
+def get_msg(channel_id, authorization_token, after=None, limit=100, around=None):
     channel_id = strip_channel_url(channel_id)
 
     url = "https://discord.com/api/v9/channels/{}/messages".format(channel_id)
-    if after_msg_id:
-        url += '?after={}'.format(after_msg_id)
+    if after:
+        url += '?after={}'.format(after)
+    elif around:
+        url += '?around={}'.format(around)
     if limit:
         url += ('&' if '?' in url else '?') + 'limit=' + str(limit)
     # if __DEBUG__:
     #     print('get_msg:', url)
     return get_api(url, authorization_token)
 
+def get_message(channel_url, authorization_token):
+    channel_id = strip_channel_url(channel_url)
+    url = "https://discord.com/api/v9/channels/{}/message".format(channel_id)
+    return get_api(url, authorization_token)
 
 def get_channel(channel_id, authorization_token):
     channel_id = strip_channel_url(channel_id)
@@ -550,6 +565,15 @@ def checker_callback(check_type, i, row, msgs):
             traceback.print_exc()
             return
 
+        # last msg from me
+        if newest_msg['author']['id'] in my_dc_id:
+            return
+        # last msg has my reaction emoji
+        with suppress(Exception):
+            for reaction in newest_msg['reactions']:
+                if reaction['me']:
+                    return
+
         if newest_msg:
             newest_msg_hash = msg_hash(newest_msg)
 
@@ -575,6 +599,7 @@ def checker_callback(check_type, i, row, msgs):
                 # with suppress(Exception):
                 #     if 'Round' in msg['embeds'][0]['description']:
                 #         continue
+
                 if inform_giveaway(msg):
                     has_valid_info = msg
                     break
@@ -624,15 +649,26 @@ def add_reaction_to_rumble(msgs: list, authorization_token):
     '''
     https://discord.com/api/v9/channels/1030801986687344680/messages/1031398521720557578/reactions/Swrds:872886436012126279/@me?location=Message&burst=false
     '''
-    sword_reaction = r'Swrds:872886436012126279/@me?location=Message&burst=false'
+
+    sword_reaction = r'Swrds:872886436012126279/@me?location=Message&burst=false' # rumble royale
+    sword_reaction2 = r'⚔️/@me?location=Message&burst=false' # battle royale
+
+
     for msg in msgs:
-        url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}".format( \
-            msg['channel_id'], msg['id'], sword_reaction)
+        bot_name=''
+        with suppress(Exception):
+            bot_name = msg['author']['username']
+        if bot_name.lower()=='battle royale':
+            url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}".format( \
+                msg['channel_id'], msg['id'], sword_reaction2)
+        else:
+            url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}".format( \
+                msg['channel_id'], msg['id'], sword_reaction)
         header = get_header(authorization_token)
         try:
             res = requests.put(url, headers=header)
-            res = res.json()
-            return res
+            # res = res.json()
+            # return res
         except:
             traceback.print_exc()
             # pass
@@ -653,6 +689,23 @@ def find_rumble_start_msg(msgs):
             pass
     return ret
 
+def rumble_jump_to_start(msg):
+    with suppress(Exception):
+        description=msg['embeds'][0]['description']
+        url = re.search(r'https:\/\/discord.com\/channels\/\d+\/\d+\/(\d+)', description)
+        if url:
+            return dict(id=url.group(1))
+    return dict(id='')
+
+
+def has_rumble_sword_emoji(msg):
+    with suppress(Exception):
+        if (msg['reactions'][0]['emoji']['name'] == 'Swrds' or \
+            msg['reactions'][0]['emoji']['name'] == '⚔') and \
+                msg['reactions'][0]['me'] == False:
+            return True
+    return False
+
 
 def msg_has_my_emoji(msg):
     with suppress(Exception):
@@ -662,7 +715,7 @@ def msg_has_my_emoji(msg):
     return False
 
 
-def inform_giveaway(msg):
+def inform_giveaway(msg, auto_click=True):
     info = is_giveaway(msg)
     if msg_has_my_emoji(msg):
         return False
@@ -670,8 +723,19 @@ def inform_giveaway(msg):
     if info['has_mention']:
         return True
     if re.search('rumble royale|battle royale', info['bot'].lower()):
-        if info['type'] == 'start' or info['type'] == 'waiting':
-            return True
+        if auto_click and has_rumble_sword_emoji(msg):
+            add_reaction_to_rumble([msg], auth)
+            rumble_msg_joined.add(msg['id'])
+        if info['type'] == 'start':
+            if msg['id'] in rumble_msg_joined:
+                return False
+            else:
+                return True
+        elif info['type'] == 'waiting':
+            if rumble_jump_to_start(msg)['id'] in rumble_msg_joined:
+                return False
+            else:
+                return True
         else:
             return False
     elif info['bot']:
@@ -682,11 +746,10 @@ def inform_giveaway(msg):
         else:
             return True
     else:
-        if msg_has_str(msg, 'http', 'premint', 'superful', 'alphabot','giveaway', '抽獎'):
+        if msg_has_str(msg, 'http', 'premint', 'superful', 'alphabot', 'giveaway', '抽獎'):
             return True
         else:
             return False
-
 
 
 def is_giveaway(msg):
@@ -704,7 +767,7 @@ def is_giveaway(msg):
                     ret['type'] = 'start'
                     break
                 elif '🎉' in msg['content']:
-                    ret['type']='done,result'
+                    ret['type'] = 'done,result'
                     break
                 elif 'starting in' in embed['description'].lower() \
                         or '開始まで' in embed['description']:
@@ -747,7 +810,6 @@ def is_giveaway(msg):
             if msg_has_str(msg, 'ended') or msg_has_str(msg, 'congratu'):
                 ret['type'] = 'result'
 
-
     return ret
 
 
@@ -782,16 +844,38 @@ def has_mention(msg, dcid=my_dc_id):
     return False
 
 
+def etheruko_interaction():
+    header = get_header(auth)
+    header['referer'] = 'https://discord.com/channels/997036565161312266/1014774016659169430'
+    url = 'https://discord.com/api/v9/interactions'
+    data = {"type": 3,
+            "guild_id": "997036565161312266",
+            "channel_id": "1014774016659169430",
+            "message_flags": 0,
+            "message_id": "1032511728912715786",
+            "application_id": "1014732689405923408",
+            "data": {"component_type": 2, "custom_id": "action"}}
+    try:
+        res = requests.post(url, headers=header, data=data)
+        res = res.json()
+        return res
+    except:
+        traceback.print_exc()
+
+
 if __name__ == '__main__':
     auth = AUTH
     test_channel_url = 'https://discord.com/channels/1025595001549357067/1030801986687344680'
-    test_channel_url = 'https://discord.com/channels/1012566778578219040/1019181253263622227'
+    # test_channel_url = 'https://discord.com/channels/942376101215359026/956474756557840384'
+    # https://discord.com/channels/1012566778578219040/1019181253263622227/1032649553171730452
+    # https://discord.com/channels/1012566778578219040/1019181253263622227/1032649634977431552
     # test_channel_url = 'https://discord.com/channels/1010432727939563630/1016704719890165781'
     # test_message_url = 'https://discord.com/channels/1025595001549357067/1030801986687344680/1030806384922611774'
-    msgs = get_msg(test_channel_url, auth, limit=30)
-    add_reaction_to_rumble(find_rumble_start_msg(msgs), auth)
-
-
+    # msgs = get_msg(test_channel_url, auth,'1033355024346120242', limit=5)
+    # url = 'https://discord.com/api/v9/channels/{}/messages/{}'.format(1019181253263622227, 1032649553171730452)
+    # ret = get_api(url, auth)
+    # etheruko_interaction()
+    # add_reaction_to_rumble([msgs[-1]], auth)
 
     db = discord_server_channel_db()
     hq = http_request_thread()
