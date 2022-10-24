@@ -27,6 +27,7 @@ from functools import partial
 # from discord_slash import SlashCommand, SlashContext
 # from discord_slash.utils.manage_commands import create_choice, create_option
 
+
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 GUILD = os.getenv('DISCORD_GUILD')
@@ -139,6 +140,7 @@ class http_request_thread():
                             # print('Missing access to', args[0])
                             db.delete(args[0])
                             ret = None
+                            break
                         elif 'message' in ret and 'Unknown Channel' in ret.get('message', ''):
                             deleted_channel = db.delete(args[0])
                             if deleted_channel is not None and not deleted_channel.empty:
@@ -147,6 +149,7 @@ class http_request_thread():
                                 print('Unknown channel, deleting: {}/{}'.format(project[0],
                                                                                 channel_name[0]))
                             ret = None
+                            break
                         else:
                             print(ret)
                             ret = None
@@ -215,6 +218,7 @@ async def list_following(ctx, type=None):
     else:
         pass
 
+
 @bot.command(name='list-follow-project', description='list followed servers/channels')
 # @commands.has_permissions(administrator=True)
 async def list_following_project(ctx, type=None):
@@ -223,6 +227,7 @@ async def list_following_project(ctx, type=None):
         await ctx.send(db.data['project'].unique().to_markdown(tablefmt='grid'))
     else:
         pass
+
 
 @bot.command(name='reload', description='reload table')
 @commands.has_permissions(administrator=True)
@@ -250,7 +255,7 @@ async def follow(ctx,
     channel = get_channel(channel_url, auth)
 
     if not follow_type:
-        if re.search(r'announce|news|通告|公告|アナウン|お知|ticket', channel['name'], re.I): # also track ticket
+        if re.search(r'announce|news|通告|公告|アナウン|お知|ticket', channel['name'], re.I):  # also track ticket
             follow_type = 'announcement'
         elif re.search(r'giveaway|collab|抽獎', channel['name'], re.I):
             follow_type = 'giveaway'
@@ -306,6 +311,21 @@ class RepeatedTimer(object):
         self._timer.cancel()
         self.is_running = False
 
+
+def user_send_msg(channel_url, text, auth):
+    channel_id = strip_channel_url(channel_url)
+    url = "https://discord.com/api/v9/channels/{}/messages".format(channel_id)
+    header = get_header(auth)
+    msg = {
+        "content": text,
+        "nonce": "82329451214{}33232234".format(random.randrange(0, 1000)),
+        "tts": False,
+    }
+    try:
+        res = requests.post(url, headers=header, data=msg)
+        return res
+    except:
+        traceback.print_exc()
 
 # @RateLimiter(max_calls=MAX_CALLS_PER_MINUTE, period=ONE_MINUTE)
 def get_api(url, authorization_token):
@@ -423,10 +443,12 @@ def get_msg(channel_id, authorization_token, after=None, limit=100, around=None)
     #     print('get_msg:', url)
     return get_api(url, authorization_token)
 
+
 def get_message(channel_url, authorization_token):
     channel_id = strip_channel_url(channel_url)
     url = "https://discord.com/api/v9/channels/{}/message".format(channel_id)
     return get_api(url, authorization_token)
+
 
 def get_channel(channel_id, authorization_token):
     channel_id = strip_channel_url(channel_id)
@@ -493,8 +515,20 @@ def test_callback(channel, msg):
     channel_send_q.put((channel, msg))
 
 
-@tasks.loop(seconds=5)
+@tasks.loop(seconds=0.5)
 async def channel_send_from_q():
+    for _ in range(3):
+        if rumble_send_q.empty():
+            break
+        b = rumble_send_q.get()
+        if type(b) is dict:
+            if 'method' in b:
+                if b['method'].lower() == 'put':
+                    res = requests.put(url=b['url'], headers=b.get('headers', {}))
+                    sleep(0.25)
+                    if res.status_code != 204:
+                        print(b, res)
+
     batch = []
     while not channel_send_q.empty():
         batch.append(channel_send_q.get())
@@ -502,14 +536,17 @@ async def channel_send_from_q():
         return
     to_be_sent = dict()
     for b in batch:
-        check_type, msg = b
-        if not check_type in to_be_sent:
-            to_be_sent[check_type] = ''
-        if len(msg) >= 300:
-            msg = msg[:300]
-        to_be_sent[check_type] += msg + '\n'
-        if __DEBUG__:
-            print('send msgs:', check_type, msg[:100])
+        if 0:
+            pass
+        else:
+            check_type, msg = b
+            if not check_type in to_be_sent:
+                to_be_sent[check_type] = ''
+            if len(msg) >= 300:
+                msg = msg[:300]
+            to_be_sent[check_type] += msg + '\n'
+            if __DEBUG__:
+                print('send msgs:', check_type, msg[:100])
     for check_type, msg in to_be_sent.items():
         channel = client_channels[check_type]
         msg = msg.rstrip()
@@ -650,28 +687,33 @@ def add_reaction_to_rumble(msgs: list, authorization_token):
     https://discord.com/api/v9/channels/1030801986687344680/messages/1031398521720557578/reactions/Swrds:872886436012126279/@me?location=Message&burst=false
     '''
 
-    sword_reaction = r'Swrds:872886436012126279/@me?location=Message&burst=false' # rumble royale
-    sword_reaction2 = r'⚔️/@me?location=Message&burst=false' # battle royale
-
+    sword_reaction = r'Swrds:872886436012126279/@me?location=Message&burst=false'  # rumble royale
+    sword_reaction2 = r'⚔️/@me?location=Message&burst=false'  # battle royale
+    # sword_reaction3 = r'⚔/@me?location=Message&burst=false'
 
     for msg in msgs:
-        bot_name=''
+        bot_name = ''
         with suppress(Exception):
             bot_name = msg['author']['username']
-        if bot_name.lower()=='battle royale':
+        header = get_header(authorization_token)
+        if bot_name.lower() == 'battle royale':
+            try:
+                req_reaction = msg['reactions'][0]['emoji']['name'] + '/@me?location=Message&burst=false'
+            except:
+                req_reaction = sword_reaction2
             url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}".format( \
-                msg['channel_id'], msg['id'], sword_reaction2)
+                msg['channel_id'], msg['id'], req_reaction)
+            rumble_send_q.put(dict(method='put', url=url, headers=header))
+            # url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}".format( \
+            #     msg['channel_id'], msg['id'], sword_reaction3)
+            # rumble_send_q.put(dict(method='put', url=url, headers=header))
         else:
             url = "https://discord.com/api/v9/channels/{}/messages/{}/reactions/{}".format( \
                 msg['channel_id'], msg['id'], sword_reaction)
-        header = get_header(authorization_token)
-        try:
-            res = requests.put(url, headers=header)
-            # res = res.json()
-            # return res
-        except:
-            traceback.print_exc()
-            # pass
+
+            rumble_send_q.put(dict(method='put', url=url, headers=header))
+
+        return
 
 
 def find_rumble_start_msg(msgs):
@@ -689,9 +731,10 @@ def find_rumble_start_msg(msgs):
             pass
     return ret
 
+
 def rumble_jump_to_start(msg):
     with suppress(Exception):
-        description=msg['embeds'][0]['description']
+        description = msg['embeds'][0]['description']
         url = re.search(r'https:\/\/discord.com\/channels\/\d+\/\d+\/(\d+)', description)
         if url:
             return dict(id=url.group(1))
@@ -864,14 +907,17 @@ def etheruko_interaction():
 
 
 if __name__ == '__main__':
+    channel_send_q = Queue()
+    rumble_send_q = Queue()
+
     auth = AUTH
     test_channel_url = 'https://discord.com/channels/1025595001549357067/1030801986687344680'
-    # test_channel_url = 'https://discord.com/channels/942376101215359026/956474756557840384'
+    test_channel_url = 'https://discord.com/channels/1012566778578219040/1019181253263622227'
     # https://discord.com/channels/1012566778578219040/1019181253263622227/1032649553171730452
     # https://discord.com/channels/1012566778578219040/1019181253263622227/1032649634977431552
     # test_channel_url = 'https://discord.com/channels/1010432727939563630/1016704719890165781'
     # test_message_url = 'https://discord.com/channels/1025595001549357067/1030801986687344680/1030806384922611774'
-    # msgs = get_msg(test_channel_url, auth,'1033355024346120242', limit=5)
+    # msgs = get_msg(test_channel_url, auth, '1033736470026014732', limit=5)
     # url = 'https://discord.com/api/v9/channels/{}/messages/{}'.format(1019181253263622227, 1032649553171730452)
     # ret = get_api(url, auth)
     # etheruko_interaction()
@@ -879,7 +925,6 @@ if __name__ == '__main__':
 
     db = discord_server_channel_db()
     hq = http_request_thread()
-    channel_send_q = Queue()
 
     # db.save()
     # msgs = get_msg(test_channel_id, auth)
